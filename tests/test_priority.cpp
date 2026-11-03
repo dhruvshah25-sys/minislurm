@@ -51,7 +51,9 @@ TEST(JobSizeTable) {
         return static_cast<std::uint32_t>(1000 * jobsize_factor(1, cpus, 1, 224));
     };
     CHECK_EQ(pts(1), 502u);
-    CHECK_EQ(pts(8), 517u);  // 517.86 — the brief rounds to 518; sprio truncates
+    // 8 CPUs = 517.86: the brief prints 518. Truncate vs round is unverified
+    // (see priority.hpp), so check the exact value instead of a column.
+    CHECK_NEAR(1000 * jobsize_factor(1, 8, 1, 224), 517.857, 1e-3);
     CHECK_EQ(pts(32), 571u);
     CHECK_EQ(pts(112), 750u);
     CHECK_EQ(pts(224), 1000u);

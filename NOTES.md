@@ -14,12 +14,19 @@ Your lab notebook. Answer in your own words, one or two lines each, and cite the
 9. What happens to running jobs if slurmctld restarts? What if slurmd restarts?
 10. `/dev/nvidia*` is still 0666 (KT §17.2). As a plain SSH user, what could you do that you shouldn't be able to? (Answer this, but don't try it.)
 
-## M1: tsrun
-- Why `volatile sig_atomic_t`?
+## M1: priority engine (src/sched/, already built; your job is to verify it)
+1. Load the real `sshare -l -P` (from recon/anon) into `AssocTree`. Does every FairShare match? If not, where does my Fair Tree model differ from `fair_tree.c` in slurm-22-05-11-1?
+2. Why does job 1901 show PRIORITY 4103 when its columns add up to 4102? Explain it using CS:APP 2.4 (floating point → integer conversion).
+3. Does `sprio` truncate or round each column? Find a pending job with 8 CPUs (517.86) or read `src/sprio/print.c`. Fix `Priority::*_col()` if I got it wrong.
+4. With Fair Tree, can a student ever outrank a researcher? What would have to change in `sshare`?
+5. Before 2026-10-15, why did GPU hogs look like light users? Use `compute_billing` with `BillingWeights{}` to show it.
+
+## M2: msrun
+- Why `volatile sig_atomic_t`? Why isn't `std::atomic<int>` the textbook answer here?
 - The SIGCHLD race and how blocking + sigsuspend fixes it:
 - Why do both parent and child call setpgid?
 - What survives execve: handlers, ignored signals, the mask?
-- Why `_exit` in the child?
+- Why `_exit` in the child? What would `exit()` run in a C++ program that `_exit` skips?
 - Why O_CLOEXEC on the output fd?
 - What does `kill(-pid, sig)` do?
 - Units of `ru_maxrss` on Linux:

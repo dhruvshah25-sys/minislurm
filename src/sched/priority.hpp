@@ -10,9 +10,12 @@
 //            (Slurm 22.05, PriorityFavorSmall=No, no SMALL_RELATIVE_TO_TIME)
 //
 // Subtle detail worth knowing: slurmctld sums the factors as doubles and
-// truncates ONCE. sprio prints each column truncated separately. So the
-// columns don't always add up to PRIORITY:
+// converts to an integer ONCE. sprio prints each column as its own integer.
+// So the columns don't always add up to PRIORITY:
 //     job 1901 on spit-hpc: 83 + 3448 + 571 = 4102, but PRIORITY = 4103.
+// UNVERIFIED: whether sprio truncates or rounds each column. The live
+// numbers fit both. *_col() truncates; settle it (NOTES.md, M1 Q3) with
+// an 8-CPU pending job (517.86: truncation shows 517, rounding 518).
 #include <cstdint>
 #include <string>
 

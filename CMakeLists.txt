@@ -33,6 +33,17 @@ target_include_directories(msl_sched PUBLIC src)
 add_executable(msprio-demo tools/msprio_demo.cpp)
 target_link_libraries(msprio-demo PRIVATE msl_sched)
 
+# M2: the job runner (slurmstepd-lite). Skeleton with TODOs, you write it.
+add_executable(msrun src/exec/msrun.cpp)
+
+# `cmake --build build --target m2-test` runs the shell tests against msrun.
+# Not part of ctest yet: they fail until the TODOs are done.
+add_custom_target(m2-test
+  COMMAND ${CMAKE_COMMAND} -E env MSRUN=$<TARGET_FILE:msrun>
+          bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_msrun.sh
+  DEPENDS msrun
+  USES_TERMINAL)
+
 # ---- tests -------------------------------------------------------------------
 enable_testing()
 add_executable(msl_tests

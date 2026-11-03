@@ -1,204 +1,169 @@
 # minislurm roadmap
 
-Each milestone has four parts:
+Every milestone follows the same loop:
 
-- **Mirrors:** the piece of the SPIT cluster it rebuilds.
-- **Learn:** the systems concepts it teaches.
-- **Read:** what to read first.
-- **Done when:** a check you can run, ideally compared with the real cluster.
+1. **Learn:** the CS:APP chapter and the man pages.
+2. **Build:** the minislurm piece.
+3. **Compare:** read the matching code in Slurm (`SchedMD/slurm`, tag
+   `slurm-22-05-11-1`, the exact version on the cluster).
+4. **Observe:** look at the same thing live on hpc.spit.ac.in, read-only.
 
-The order follows CS:APP: M2 uses chapters 8 and 10, M3 uses 11 and 12, and
-M5 uses 9.
+Write what you find in `NOTES.md`. If you can't explain it, you haven't learned it yet.
+
+| # | Build | Learn | CS:APP | On the real cluster |
+|---|---|---|---|---|
+| M0 | run `recon/observe.sh`, answer NOTES M0 | what's actually on the box | – | everything |
+| M1 ✅ | priority engine | trees, floating point | 2.4 | `priority/multifactor`, `fair_tree.c`, `sprio`, `sshare` |
+| **M2** ⏭ | `msrun`: one job, time limit, KillWait, output, MaxRSS | processes, signals, races, dup2 | 8, 10 | `slurmstepd`, `KillWait=30` |
+| M3 | `mslurmctld` + CLI over sockets, auth, crash-safe state | sockets, epoll, protocols, fsync | 11, 12 | slurmctld :6817, munge, `StateSaveLocation` |
+| M4 | allocator + scheduler loop + backfill + reservations | bitmaps, bin packing, planning | – | `cons_tres`, `sched/backfill`, squeue reasons |
+| M5 | cgroup v2 per job (fixes the XFAIL test) | VM, RSS vs page cache, OOM | 9 | `proctrack/cgroup`, `task/cgroup` |
+| M6 | accounting in SQLite, prolog/epilog | persistence, daemons and fork | 8 | slurmdbd + MariaDB, `prolog.sh`, `gpu_notify.sh` |
+| M7 | GPU isolation, all 4 layers incl. eBPF | permissions, ACLs, eBPF | 10 | `fix-gpu-lockdown.sh`, `ConstrainDevices` |
+| M8 | GPU + NUMA deep dive with CUDA | PCIe, NUMA, CUDA | 6, 9 | `gres.conf`, `nvidia-smi topo -m` |
+| M9 | Prometheus exporter + shadow-mode replay of real history | observability, simulation | – | Prometheus, Grafana |
+| M10 | multi-node: node daemon on 2–3 VMs, heartbeats, MPI | distributed failure | 11 | what SPIT looks like with more nodes |
 
 ---
 
-## M1: Priority engine ✅
+## M0: Recon (read-only, on the cluster)
+
+Run `recon/observe.sh` on hpc.spit.ac.in as yourself, a few times on
+different days. It only reads. Copy **only** the `anon/` folder off the
+server. Then answer NOTES M0. Its output also feeds M1's verification and
+M9's simulator.
+
+## M1: Priority engine ✅ (built; verifying it is your job)
 
 **Mirrors:** `priority/multifactor`, `PriorityDecayHalfLife=7-0`, Fair Tree,
-`TRESBillingWeights` + `MAX_TRES`, `sprio`, `sshare`.
+`TRESBillingWeights` + `MAX_TRES`.
 
-**Learn:** how a scheduler turns "fairness" into one number, and how
-floating-point truncation shows up in operator-visible output (`sprio`
-columns don't add up to PRIORITY).
+**Done:** the tests reproduce the live `sprio -l` (4104 / 4103 / 4082), the
+billing for every job shape in the brief (112 / 117 / 58 / 7), and the
+account-level LevelFS (1.3033 / 0.3093). See `tests/priority_vectors.md`.
 
-**Done:** the tests reproduce the live `sprio -l` output (4104 / 4103 / 4082),
-the billing for every job shape in the brief (112 / 117 / 58 / 7), and the
-account-level LevelFS (1.3033 / 0.3093).
+**Your part:** NOTES M1. Most importantly, load the real `sshare -l -P` and
+check every user. The per-user split in `tools/spit_scenario.hpp` is
+reconstructed; only the account totals are real. Then implement the classic
+`NO_FAIR_TREE` formula (`F = 2^(-U/S)`) and compare which students gain or lose.
 
-**Your exercises (do these before M2, they're short):**
-1. Run `sshare -l -P` on the cluster, write a small parser that loads it into
-   `AssocTree`, and check that every user's FairShare matches. Any mismatch
-   means my model of Fair Tree is wrong somewhere, and finding out where is
-   the lesson.
-2. Implement the classic formula (`PriorityFlags=NO_FAIR_TREE`):
-   `F = 2^(-U/S)`. Compare the two algorithms on the same tree. Which
-   students gain and which lose?
-3. Look up how Slurm defines FairShare for a user with 0 shares, and check
-   that this code agrees.
+## M2: `msrun` ⏭ NEXT, and yours to write
 
----
+`src/exec/msrun.cpp` is a skeleton with 6 TODOs, each with the CS:APP
+section and the questions it needs. Argument parsing and a RAII `UniqueFd`
+are given.
 
-## M2: Job executor (`msstepd`) ⏭ NEXT
+```bash
+cmake --build build --target m2-test
+```
 
-**Mirrors:** `slurmstepd`, the process that actually runs your batch script
-on the node. `sbatch --output=slurm-%j.out`, `--time`, `scancel`,
-`KillWait=30`, job exit codes in `sacct`.
+You're done at `passed 12, failed 0, expected-fail 1`, with the sanitizer
+build on. The expected fail (test 13) is on purpose: a child that calls
+`setsid()` escapes your process group and survives. The cluster's own
+`gpu_notify.sh` uses `setsid -f` for exactly this reason. M5 fixes it.
 
-**Build:** a library `src/exec/` and a tool `msrun <script> [--time=SECONDS]`:
-1. `fork()` + `execve()` the script with `/bin/bash`.
-2. Put the child in its own session and process group (`setsid()`) so you can
-   signal the whole tree: `kill(-pgid, sig)`.
-3. Redirect stdout and stderr to `slurm-<jobid>.out` (`open`, `dup2`, close
-   everything else: no fd leaks into user jobs).
-4. Set the environment the way Slurm does: `SLURM_JOB_ID`,
-   `SLURM_CPUS_ON_NODE`, `SLURM_SUBMIT_DIR`, `TMPDIR`.
-5. Time limit: when it expires send `SIGTERM`, wait `KillWait` (30 s), then
-   send `SIGKILL`. Use `signalfd` or `pidfd_open` with `poll` rather than
-   `sleep` loops.
-6. Collect the result with `wait4()`: exit code, signal, and `rusage` (peak
-   RSS = MaxRSS in sacct, CPU time).
-7. Handle `SIGINT` to `msrun` itself as `scancel`.
-
-**Learn:** process control, signals and the races around them, file
-descriptors, why a job's children can escape a naive kill (that's why
-Slurm uses cgroups for process tracking, which comes in M5).
-
-**Read:** CS:APP ch. 8 (Exceptional Control Flow), all of it, especially
-8.5 on signals. CS:APP ch. 10 (System-Level I/O). `man 7 signal`,
-`man 2 pidfd_open`.
-
-**Done when:**
-- A script that runs `sleep 1000 & sleep 1000 & wait` is fully killed at the
-  time limit, with no orphans left (check with `ps -ef`).
-- A script that traps SIGTERM gets 30 s and then dies by SIGKILL.
-- The exit status is reported as `exit:signal` like `sacct`'s `ExitCode`
-  (`0:0`, `1:0`, `0:9`).
-- Tests cover all of the above. `valgrind --track-fds=yes` shows no leaked fds.
-
----
+**Stretch:** replace `alarm` + `sigsuspend` with `pidfd_open` + `signalfd` +
+`timerfd` in one `poll()` loop. That's how a modern daemon does it, and it's
+the shape M3's event loop needs.
 
 ## M3: Controller + CLI over sockets
 
-**Mirrors:** `slurmctld`, `sbatch`, `squeue`, `scancel`, `sprio`.
+**Mirrors:** `slurmctld`, `sbatch`, `squeue`, `scancel`, `sprio`, munge.
 
-**Build:** `mslurmctld` daemon holding the job queue; CLIs that talk to it
-over a Unix socket with a length-prefixed binary protocol you design
-(header: version, msg type, length, auth). An `epoll` event loop and a
-`#SBATCH` directive parser. Job states PENDING → RUNNING → COMPLETED,
-FAILED, CANCELLED, TIMEOUT. Wire M1's priority into `msqueue`'s ordering.
+**Build:**
+- An `mslurmctld` daemon holding the job queue.
+- `msbatch`, `msqueue`, `mscancel` and `msprio`, talking to it over a Unix
+  or TCP socket using a length-prefixed binary protocol you design (version,
+  type, length, HMAC).
+- An `epoll` loop and a `#SBATCH` parser.
+- Job states PENDING → RUNNING → COMPLETED, FAILED, CANCELLED, TIMEOUT.
+- Run jobs with M2's code and order the queue with M1.
+- State saved with a write-ahead log + `fsync`.
 
-**Learn:** sockets, framing, partial reads and writes, event loops versus
-threads, protocol versioning.
+**Done when:** many clients work at once, a client killed mid-message
+doesn't hurt the daemon, and after `kill -9` and a restart no job is lost.
 
-**Read:** CS:APP ch. 11 (Network Programming), ch. 12 (Concurrent
-Programming). Beej's Guide to Network Programming. `man 7 epoll`.
+**Read:** CS:APP 11, 12; Beej's Guide to Network Programming; `epoll(7)`.
 
-**Done when:** `msbatch job.sh; msqueue; mscancel <id>` works with many
-concurrent clients, and killing a client mid-message doesn't hurt the daemon.
-
----
-
-## M4: Resource allocation + scheduling loop + backfill
+## M4: Allocation + scheduling + backfill
 
 **Mirrors:** `select/cons_tres`, `CR_Core_Memory`, `OverSubscribe=FORCE:4`,
-`DefMemPerCPU=4000`, `DefCpuPerGPU=8`, `sched/backfill`, `squeue` reasons
-`(Priority)`, `(Resources)`, `(PartitionTimeLimit)`, `(ReqNodeNotAvail)`,
-maintenance reservations.
+`DefMemPerCPU=4000`, `DefCpuPerGPU=8`, `sched/backfill`, maintenance
+reservations, and the reasons `(Priority)`, `(Resources)`,
+`(PartitionTimeLimit)` and `(ReqNodeNotAvail)`.
 
-**Build:** a node model of 2 sockets × 56 cores × 2 threads as core bitmaps,
-memory, and 2 GPUs. An allocator that picks cores (socket-packed), a main
-scheduler (highest priority job that fits), and backfill: lower-priority jobs
-may start if they end before the top job's reserved start time. Reservations.
+**Build:**
+- The node as 2 sockets × 56 cores × 2 threads in core bitmaps, plus memory
+  and 2 GPUs.
+- A main scheduler that runs the highest-priority job that fits.
+- Backfill: a lower-priority job may start only if it ends before the top
+  job's reserved start.
 
-**Learn:** bitmaps, bin packing, why backfill needs accurate time limits, and
-time-based planning.
+**Done when:** an 8-day request shows `(PartitionTimeLimit)` and never
+starts, and a job that would run into a reservation shows
+`(ReqNodeNotAvail)`.
 
-**Done when:** you replay a week of real `sacct` history (M9's simulator
-starts here) and get plausible start times. A job asking for 8 days shows
-`(PartitionTimeLimit)` and never starts.
+## M5: cgroups v2
 
----
+**Mirrors:** `proctrack/cgroup`, `task/cgroup`, and `CR_Core_Memory` enforcement.
 
-## M5: Isolation: cgroups v2 + GPU lockdown
+**Build:**
+- A per-job cgroup with `cpuset.cpus`, `memory.max` and `pids.max`.
+- Launch straight into it with `clone3(CLONE_INTO_CGROUP)`.
+- Kill the job with `cgroup.kill`.
+- An `OUT_OF_MEMORY` job state.
 
-**Mirrors:** `proctrack/cgroup`, `task/cgroup`, `ConstrainDevices`, the
-prolog `setfacl` on `/dev/nvidiaN`, the epilog revoke, `CUDA_VISIBLE_DEVICES`,
-and the trap where Slurm GPU 0 = PCI 61:00.0 = `nvidia-smi` index 1.
+**Done when:** test 13 passes, a fork bomb stops at `pids.max`, and a
+memory hog is OOM-killed inside its own cgroup only.
 
-**Build:** per-job cgroup v2 (`cpuset.cpus`, `memory.max`, `pids.max`), with
-jobs launched straight into it (`clone3` with `CLONE_INTO_CGROUP`). Kill the
-whole job via `cgroup.kill`. Device control on cgroup v2 is an **eBPF
-program** (`BPF_PROG_TYPE_CGROUP_DEVICE`): write it as raw BPF instructions
-in C++, the way Slurm does. Use NVML to map GPU index ↔ PCI bus ID ↔ minor
-number. Prolog and epilog hooks.
+**Read:** CS:APP 9; the kernel's `admin-guide/cgroup-v2`. **Run this in a
+VM where you're root, never on the production box.**
 
-**Learn:** virtual memory and OOM behaviour, how the kernel enforces limits,
-eBPF basics, and the PCI device model.
+## M6: Accounting + prolog/epilog
 
-**Read:** CS:APP ch. 9 (Virtual Memory). Kernel docs `admin-guide/cgroup-v2`.
-Slurm's `cgroup_v2.c` and its eBPF device program.
+**Mirrors:** slurmdbd + MariaDB, `sacct`, `sshare`, `sync_slurm_users.sh`,
+`AccountingStorageEnforce=associations`, `prolog.sh`, `epilog.sh`, and
+`gpu_notify.sh`'s `setsid -f` trick.
 
-**Done when:** inside a job, opening the other GPU gives `EPERM`; a fork bomb
-hits `pids.max`; a memory hog is OOM-killed inside its cgroup only; M2's
-orphan test passes without process-group tricks. **Use a VM with a
-passthrough GPU or an emulated device node, never the production box.**
+**Build:** `msslurmdbd` backed by SQLite, `mssacct` with the same columns as
+`sacct -X -o JobID,AllocTRES`, and usage decay on the stored usage
+(feeding M1).
 
----
+## M7: GPU isolation, SPIT's 4 layers
 
-## M6: Accounting + crash safety
+The layers are:
+1. Device permissions 0660.
+2. A per-job ACL set in the prolog.
+3. A cgroup device filter.
+4. Revoking the ACL in the epilog.
 
-**Mirrors:** `slurmdbd` + MariaDB, `sacct`, `sshare`, `StateSaveLocation`,
-the hourly `sync_slurm_users.sh` (associations), and
-`AccountingStorageEnforce=associations`.
+On cgroup v2, layer 3 is an **eBPF program**
+(`BPF_PROG_TYPE_CGROUP_DEVICE`). Write it as raw BPF instructions from C++,
+the way Slurm's `cgroup_v2.c` does. Use NVML to map index ↔ PCI bus ID ↔
+`/dev/nvidiaN` minor.
 
-**Build:** `msslurmdbd` backed by SQLite (job records, associations, usage).
-The controller persists its state with write-ahead logging and `fsync`, then
-survives `kill -9` and restarts with running jobs still known.
+**Done when:** inside a job, opening the other GPU fails with `EPERM`.
 
-**Learn:** durability, fsync semantics, crash-consistent file formats, and
-schema design.
+## M8: GPU + NUMA deep dive
 
-**Done when:** `kill -9 mslurmctld` mid-workload, restart, and nothing is lost.
-`mssacct` output has the same columns as the real `sacct -X -o JobID,AllocTRES`.
+Write CUDA C++ microbenchmarks: host↔device bandwidth, P2P between the two
+GPUs, and NUMA-local versus remote CPU binding. Run them on the real GPUs as
+a **normal user job** (`sbatch`), like any student. Then make M4's allocator
+bind a job's CPUs to its GPU's socket, and measure the gain.
 
----
+## M9: Observability + shadow mode
 
-## M7: Multi-node: node daemon, heartbeats, auth
+Build an embedded HTTP server that serves Prometheus text format: queue
+depth, per-user usage, NVML GPU stats, and scheduler loop latency. Then build
+**shadow mode**: replay the anonymised `sacct` history through M1 and M4 in a
+discrete-event simulation and compare with what Slurm actually did. That lets
+you answer *"what if the GPU weight were 80?"* or *"what does a 3-day half-life
+do to student waits?"* with data, before the next internal vote. That's useful
+to the cluster team, and it stands out on a systems-engineering application.
 
-**Mirrors:** `slurmd`, `SlurmdTimeout=300`, node states (IDLE, MIXED,
-ALLOCATED, DRAIN, DOWN), `ReturnToService=1`, and munge (the KT says the
-munge key has only an offline copy, and now you'll know why it matters).
+## M10: Multi-node
 
-**Build:** split controller and node daemon. Use 3 VMs or containers as
-nodes. HMAC-signed credentials with a shared key. Heartbeats and failure
-detection. Drain and resume.
-
-**Learn:** distributed failure detection, clocks, authentication, and idempotent RPCs.
-
----
-
-## M8: Observability
-
-**Mirrors:** `node_exporter :9100`, `dcgm :9400`, the slurm exporter `:9092`,
-and the Grafana dashboards.
-
-**Build:** an embedded HTTP server serving Prometheus text format (queue
-depth, per-user usage, GPU utilisation via NVML, scheduler loop latency).
-Point the real Prometheus at your VM and build a dashboard.
-
----
-
-## M9: Trace-driven policy simulator (useful to the admin team)
-
-**Build:** feed `sacct -P` history from the real cluster into M1 and M4 in a
-discrete-event simulation. Answer questions like *"what if GPU weight were
-80 instead of 112?"* or *"what does a 3-day half-life do to student wait
-times?"* with data, before the internal vote.
-
----
-
-## M10: Stretch
-
-Job arrays and dependencies, `srun` steps, MPI launch (PMIx), preemption,
-GPU sharing (MPS/MIG), a C++ REST API, and a CUDA benchmark job that
-measures what the RTX 6000 Adas actually deliver.
+Run the node daemon on 2–3 VMs and add heartbeats, `SlurmdTimeout`, node
+states (IDLE, MIXED, ALLOCATED, DRAIN, DOWN), `ReturnToService`, separate
+login and compute nodes, and an MPI hello world across them. Stretch goals:
+job arrays, dependencies, `srun` steps, PMIx, preemption, and MPS or MIG.

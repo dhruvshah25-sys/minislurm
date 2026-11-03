@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# Milestone 1 tests for tsrun.  Run:  make test   (or  TSRUN=./build/tsrun tests/test_m1.sh)
-# Each test runs tsrun and checks the final report line it prints on stderr:
-#   tsrun: state=<STATE> exit=<code>:<signal> elapsed=<sec>s maxrss_kb=<kb>
+# M2 tests for msrun.  Run:  cmake --build build --target m2-test   (or  MSRUN=./build/msrun tests/test_msrun.sh)
+# Each test runs msrun and checks the final report line it prints on stderr:
+#   msrun: state=<STATE> exit=<code>:<signal> elapsed=<sec>s maxrss_kb=<kb>
 set -u
-TSRUN=${TSRUN:-./build/tsrun}
+MSRUN=${MSRUN:-./build/msrun}
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 pass=0; fail=0; xfail=0
 
 ok()   { echo "  PASS  $1"; pass=$((pass+1)); }
 bad()  { echo "  FAIL  $1"; echo "        got: $2"; fail=$((fail+1)); }
-report_line() { grep '^tsrun: state=' "$1" | tail -1; }
+report_line() { grep '^msrun: state=' "$1" | tail -1; }
 field() { sed -n "s/.* $1=\([^ ]*\).*/\1/p" <<<"$2"; }        # field exit "<line>"
-state() { sed -n 's/^tsrun: state=\([A-Z_]*\).*/\1/p' <<<"$1"; }
+state() { sed -n 's/^msrun: state=\([A-Z_]*\).*/\1/p' <<<"$1"; }
 elapsed_lt() { awk -v e="${1%s}" -v m="$2" 'BEGIN{exit !(e<m)}'; }
 elapsed_ge() { awk -v e="${1%s}" -v m="$2" 'BEGIN{exit !(e>=m)}'; }
 
-run() { "$TSRUN" "$@" 2>"$TMP/err" >"$TMP/out"; report_line "$TMP/err"; }
+run() { "$MSRUN" "$@" 2>"$TMP/err" >"$TMP/out"; report_line "$TMP/err"; }
 
-echo "== Milestone 1: tsrun =="
-[ -x "$TSRUN" ] || { echo "no binary at $TSRUN (run make first)"; exit 1; }
+echo "== M2: msrun =="
+[ -x "$MSRUN" ] || { echo "no binary at $MSRUN (build first: cmake --build build)"; exit 1; }
 
 # 1. success
 l=$(run -- true)
@@ -69,11 +69,11 @@ if [[ $(state "$l") != TIMEOUT ]]; then bad "background child killed with the jo
 elif pgrep -f "^sleep 31.7$" >/dev/null; then bad "background child killed with the job" "leftover: $(pgrep -af "^sleep 31.7$")"; pkill -f "^sleep 31.7$"
 else ok "background child killed with the job"; fi
 
-# 11. scancel: SIGTERM to tsrun cancels the job
-"$TSRUN" -- sleep 30 2>"$TMP/err" & tp=$!
+# 11. scancel: SIGTERM to msrun cancels the job
+"$MSRUN" -- sleep 30 2>"$TMP/err" & tp=$!
 sleep 0.5; kill -TERM $tp; wait $tp 2>/dev/null
 l=$(report_line "$TMP/err")
-[[ $(state "$l") == CANCELLED ]] && ok "SIGTERM to tsrun -> CANCELLED" || bad "SIGTERM to tsrun -> CANCELLED" "$l"
+[[ $(state "$l") == CANCELLED ]] && ok "SIGTERM to msrun -> CANCELLED" || bad "SIGTERM to msrun -> CANCELLED" "$l"
 
 # 12. MaxRSS (the number in SPIT's job-end email)
 if command -v python3 >/dev/null; then
@@ -82,16 +82,16 @@ if command -v python3 >/dev/null; then
   [[ -n "$r" && "$r" -ge 200000 ]] && ok "maxrss_kb reports ~200 MB job" || bad "maxrss_kb reports ~200 MB job" "$l"
 fi
 
-# 13. KNOWN LIMITATION (expected to fail until Milestone 2):
+# 13. KNOWN LIMITATION (expected to fail until M5 (cgroups)):
 #     a child that calls setsid() leaves your process group and survives the kill.
 #     SPIT's own gpu_notify.sh uses `setsid -f` for exactly this reason (KT doc 9.8).
 l=$(run --time 1 -- sh -c 'setsid sleep 32.3 & sleep 30')
 sleep 0.3
 if [[ $(state "$l") != TIMEOUT ]]; then echo "  SKIP  setsid escapee (job didn't run/time out yet)"
 elif pgrep -f "^sleep 32.3$" >/dev/null; then
-  echo "  XFAIL setsid escapee survived -> this is why Slurm uses proctrack/cgroup. Fixed in M2."
+  echo "  XFAIL setsid escapee survived -> this is why Slurm uses proctrack/cgroup. Fixed in M5."
   xfail=$((xfail+1)); pkill -f "^sleep 32.3$"
-else ok "setsid escapee killed (you already did M2!)"; fi
+else ok "setsid escapee killed (you already did M5!)"; fi
 
 echo
 echo "passed $pass, failed $fail, expected-fail $xfail"

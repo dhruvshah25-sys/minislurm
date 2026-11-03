@@ -1,8 +1,8 @@
-# Scheduler test vectors (for Milestone 4)
+# Scheduler test vectors (M1, encoded in tests/test_*.cpp)
 
 Every number here comes from Varun's scheduling brief (corrected 15 Oct 2026), which
 checked them against the real `sprio`/`sshare`/`sacct` on hpc.spit.ac.in.
-Your priority code has to reproduce all of them. Then (M8) you check it against live `sprio` yourself.
+Your priority code has to reproduce all of them. Then you check it against live `sprio` yourself (NOTES.md, M1).
 
 ## Billing (`TRESBillingWeights="CPU=1.0,Mem=0.92G,GRES/gpu=112"` + `PriorityFlags=MAX_TRES`)
 billing = floor(max(cpus*1.0, mem_GB*0.92, gpus*112))
@@ -17,7 +17,7 @@ billing = floor(max(cpus*1.0, mem_GB*0.92, gpus*112))
 | 8  | 32  | 2 | 224 |
 
 ## JobSize (W=1000, one node, 224 CPUs, PriorityFavorSmall=No)
-points = round(1000 * 0.5 * (1 + cpus/224))
+points = 1000 * 0.5 * (1 + cpus/224)   (8 CPUs = 517.86: the brief shows 518; whether sprio rounds or truncates is unverified, see NOTES M1 Q3)
 
 | cpus | points |
 |----:|----:|
