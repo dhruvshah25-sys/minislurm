@@ -30,3 +30,14 @@ Your lab notebook. Answer in your own words, one or two lines each, and cite the
 - Why O_CLOEXEC on the output fd?
 - What does `kill(-pid, sig)` do?
 - Units of `ru_maxrss` on Linux:
+
+#Date    #Learning
+20/11/26 I got to know first time what a fork is, nothing but a running process.
+         Then I learned about fork() a syscall, thorugh which I can create a child process,
+         which is the exact copy of parent process, like everything from parent it's memory,
+         and execution state.
+         I solved and understood a puzzle, where I got to know that since printf first stores
+         it output in the buffer, it prints to the screen once '/n' hits, and in the file
+         when buffer gets full/ program returns. So how while copying in the file using > out.txt
+         prints "before twice" instead of once, due to buffer and fork concept.
+         

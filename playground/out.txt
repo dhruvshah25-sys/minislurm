@@ -1,4 +1,0 @@
-before fork: I am process 30061
-parent: my pid is 30061, my child is 30062
-before fork: I am process 30061
-child:  my pid is 30062, my parent is 30061
